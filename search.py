@@ -1,77 +1,125 @@
-import chromadb
-from sentence_transformers import SentenceTransformer
-from mistralai.client import MistralClient
-from mistralai.models.chat_completion import ChatMessage
 import os
+import psycopg2
+from sentence_transformers import SentenceTransformer
+from dotenv import load_dotenv
+import streamlit as st
 
-# ---------- CONFIG ----------
-MISTRAL_API_KEY = os.getenv("")
+load_dotenv()
 
-client_llm = MistralClient(api_key=MISTRAL_API_KEY)
 
-# ChromaDB
-client = chromadb.Client()
-collection = client.get_collection("fashion_products")
+@st.cache_resource(show_spinner=False)
+def load_model():
+    return SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
 
-# Embedding model (lightweight)
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ---------- QUERY REWRITE ----------
-def rewrite_query(query: str) -> str:
-    messages = [
-        ChatMessage(
-            role="system",
-            content=(
-                "You rewrite fashion search queries to be more descriptive "
-                "for semantic product retrieval. Do not invent attributes."
-            )
-        ),
-        ChatMessage(role="user", content=query)
+@st.cache_resource(show_spinner=False)
+def get_db():
+    return psycopg2.connect(
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASS"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT")
+    )
+
+
+def extract_color(query: str):
+    colors = [
+        "black", "white", "red", "blue", "green",
+        "yellow", "pink", "maroon", "beige", "brown", "grey"
     ]
+    q = query.lower()
+    for c in colors:
+        if c in q:
+            return c
+    return None
 
-    response = client_llm.chat(
-        model="mistral-small-latest",
-        messages=messages,
-        temperature=0.2
-    )
 
-    return response.choices[0].message.content.strip()
+def extract_category(query: str):
+    categories = {
+        "kurti": ["kurti", "kurta"],
+        "saree": ["saree"],
+        "belt": ["belt"],
+        "dress": ["dress"]
+    }
+    q = query.lower()
+    for cat, keys in categories.items():
+        for k in keys:
+            if k in q:
+                return cat
+    return None
 
-# ---------- SEARCH ----------
-def search_products(query: str):
-    # 1. Rewrite query
-    enriched_query = rewrite_query(query)
 
-    # 2. Embed query
-    query_embedding = model.encode(enriched_query).tolist()
-
-    # 3. Vector search
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=10
-    )
-
-    # 4. Ranking
-    ranked = []
-    for i in range(len(results["ids"][0])):
-        meta = results["metadatas"][0][i]
-        distance = results["distances"][0][i]
-
-        score = (
-            0.6 * (1 - distance) +
-            0.2 * meta.get("rating", 0) +
-            0.2 * (meta.get("discount", 0) / 100)
+def color_exists(conn, color: str):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM myntra_products WHERE color = %s;",
+            (color,)
         )
+        return cur.fetchone()[0] > 0
 
-        ranked.append({
-            "score": round(score, 3),
-            "price": meta["price"],
-            "rating": meta["rating"],
-            "discount": meta["discount"],
-            "seller": meta["seller"],
-            "url": meta["url"],
-            "image": meta["image"]
+
+
+def search_products(query: str):
+    model = load_model()
+    conn = get_db()
+
+    query_embedding = model.encode(query).tolist()
+    color = extract_color(query)
+    category = extract_category(query)
+
+    rows = []
+    exact_match = False
+
+    with conn.cursor() as cur:
+
+        
+        if color and category and color_exists(conn, color):
+            cur.execute("""
+                SELECT name, img, price, rating, discount, seller,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM myntra_products
+                WHERE color = %s AND LOWER(name) LIKE %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT 5;
+            """, (query_embedding, color, f"%{category}%", query_embedding))
+            rows = cur.fetchall()
+            exact_match = bool(rows)
+
+        
+        if not rows and category:
+            cur.execute("""
+                SELECT name, img, price, rating, discount, seller,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM myntra_products
+                WHERE LOWER(name) LIKE %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT 5;
+            """, (query_embedding, f"%{category}%", query_embedding))
+            rows = cur.fetchall()
+
+      
+        if not rows:
+            cur.execute("""
+                SELECT name, img, price, rating, discount, seller,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM myntra_products
+                ORDER BY embedding <=> %s::vector
+                LIMIT 5;
+            """, (query_embedding, query_embedding))
+            rows = cur.fetchall()
+
+    results = []
+    for r in rows:
+        results.append({
+            "name": r[0],
+            "image": r[1],
+            "price": r[2],
+            "rating": r[3],
+            "discount": r[4],
+            "seller": r[5],
+            "score": round(float(r[6]), 3),
+            "exact_match": exact_match
         })
 
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-    return ranked[:5]
+    return results

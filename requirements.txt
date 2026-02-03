@@ -1,0 +1,9 @@
+psycopg2
+python-dotenv
+sentence-transformers
+pandas
+streamlit
+openai
+requests
+psycopg2-binary
+google-generativeai
