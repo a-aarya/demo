@@ -1,99 +1,99 @@
-# app.py
 import streamlit as st
+import time
+import os
 from search import search_products
-from gemini_client import extract_intent
+from llm_client import get_router_decision, generate_chat_response
 from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="AI Fashion Search", layout="wide")
+# --- 1. Page Config & CSS ---
+st.set_page_config(page_title="AI Fashion Stylist", layout="wide")
 
-st.title("🛍️ AI Fashion Search")
-st.caption(
-    "Semantic + attribute-aware product search. "
-    "Color and category are inferred automatically from the query."
-)
+st.markdown("""
+<style>
+    /* smooth fade-in animation */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .main-card {
+        animation: fadeIn 0.8s ease-out forwards;
+    }
+    .stImage img {
+        object-fit: cover;
+        height: 300px !important;
+        border-radius: 8px;
+    }
+    .price-tag { font-size: 20px; font-weight: 700; color: #4ADE80; }
+    .rating-text { color: #FACC15; font-weight: 600; }
+</style>
+""", unsafe_allow_html=True)
 
+st.title("🛍️ AI Fashion Stylist")
 
-n_results = st.slider("Number of results", min_value=3, max_value=12, value=8)
-st.write("---")
+# --- 2. Compact Render Card ---
+def render_card(item):
+    img_url = item.get("image")
+    if not img_url or str(img_url).lower() == "nan":
+        img_url = "https://via.placeholder.com/300x400?text=No+Image"
 
-
-query = st.text_input(
-    "What are you looking for?",
-    placeholder="e.g. red saree, black kurti, embroidered lehenga"
-)
-
-search_button = st.button("Search")
-
-
-if search_button and query.strip():
-
-   
-    try:
-        intent = extract_intent(query) or {}
-        st.caption(
-            f"Interpreted → "
-            f"color: {intent.get('color')}, "
-            f"category: {intent.get('category')}, "
-            f"max_price: {intent.get('max_price')}, "
-            f"min_price: {intent.get('min_price')}"
-        )
-    except Exception:
-        st.caption("Interpreted → offline fallback")
-
-    with st.spinner("Searching best matches..."):
-        try:
-            results = search_products(query, top_k=n_results)
-        except Exception as e:
-            st.error(f"Search failed: {e}")
-            results = []
-
-    if not results:
-        st.warning("No results found. Try a different query.")
-    else:
-        if not results[0].get("exact_match", False):
-            st.info("Exact filters were relaxed to improve recall.")
-
+    # Inka stylish border container
+    with st.container(border=True):
+        st.image(img_url, use_container_width=True)
+        name = item.get('name', 'Product')
+        st.markdown(f"**{name[:30]}...**")
         
-        for i, item in enumerate(results, start=1):
-            col_img, col_txt = st.columns([1, 2])
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"<span class='price-tag'>₹{item.get('price')}</span>", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<span class='rating-text'>⭐ {item.get('avg_rating', 0)}</span>", unsafe_allow_html=True)
+        st.caption(f"{item.get('brand')} | {item.get('colour', 'N/A').title()}")
 
-            # Image
-            with col_img:
-                img_url = item.get("image")
-                if img_url:
-                    st.image(img_url, use_column_width=True)
-                else:
-                    st.image(
-                        "https://assets.myntassets.com/h_720,q_90,w_540/v1/assets/images/default.jpg",
-                        use_column_width=True
-                    )
+# --- 3. Chat Logic with Slow Reveal ---
 
-            # Text
-            with col_txt:
-                st.subheader(f"{i}. {item.get('name','Unnamed product')}")
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    st.session_state.messages.append({"role": "assistant", "content": "Hi! Ready to find some styles?", "results": []})
 
-                st.markdown(
-                    f"""
-                    **Brand:** {item.get('brand','N/A')}  
-                    **Color:** {item.get('colour','N/A')}  
-                    **Price:** ₹{item.get('price','N/A')}  
-                    **Rating:** {item.get('avg_rating','N/A')} ({item.get('rating_count',0)} reviews)  
-                    **Score:** {item.get('score')} (semantic: {item.get('similarity')})
-                    """
-                )
+# Render History (Normal speed)
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg.get("results"):
+            cols = st.columns(3)
+            for idx, item in enumerate(msg["results"]):
+                with cols[idx % 3]:
+                    render_card(item)
 
-                desc = item.get("description")
-                if desc:
-                    st.markdown(f"📝 **Details:** {desc[:300]}...")
+# New Input
+if prompt := st.chat_input("Type here..."):
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt, "results": []})
 
-                if item.get("exact_match"):
-                    st.caption("✔ Matches your requested color & category")
-                else:
-                    st.caption("≈ Closely matches your intent based on style & semantics")
+    with st.chat_message("assistant"):
+        route = get_router_decision(prompt)
+        results = []
 
-            st.divider()
+        if route == "CHAT":
+            response_text = generate_chat_response(prompt)
+            st.markdown(response_text)
+        else:
+            with st.spinner("Searching..."):
+                results = search_products(prompt, top_k=6)
+            
+            st.markdown("Here are the best matches I found:")
+            
+            # THE SLOW REVEAL LOGIC
+            if results:
+               
+                grid_cols = st.columns(3)
+                for idx, item in enumerate(results):
+                   
+                    time.sleep(0.3) 
+                    with grid_cols[idx % 3]:
+                        render_card(item)
 
-st.markdown("---")
-st.caption("Built with Gemini + pgvector | Dataset: FashionDataset.csv (1k demo)")
+    # Save to history
+    st.session_state.messages.append({"role": "assistant", "content": "Here are the top matches:", "results": results})
