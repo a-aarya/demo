@@ -146,7 +146,7 @@ def render_card(item, idx, msg_idx):
         if st.button("🛒 Add to Cart", key=f"btn_cart_{msg_idx}_{idx}", use_container_width=True):
             st.toast(f"Added {item.get('brand')} to your cart! 🔥")
 
-st.title("🛍️ AI Fashion Concierge")
+st.title("🛍️ AI Fashion Assistant")
 
 # --- 3. Session State & History ---
 if "messages" not in st.session_state:
