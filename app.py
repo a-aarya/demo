@@ -4,6 +4,10 @@ import os
 from search import search_products
 from llm_client import get_router_decision, generate_chat_response
 from dotenv import load_dotenv
+import re
+
+
+
 
 load_dotenv()
 
@@ -30,11 +34,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def extract_quantity(text, default=6, max_limit=15):
+    match = re.search(r"\b(\d+)\b", text)
+    if match:
+        qty = int(match.group(1))
+        return min(qty, max_limit)
+    return default
+
 st.title("🛍️ AI Fashion Stylist")
 
 # --- 2. Compact Render Card ---
 def render_card(item):
-    img_url = item.get("image")
+    img_url = item.get("img") or item.get("image")
+
     if not img_url or str(img_url).lower() == "nan":
         img_url = "https://via.placeholder.com/300x400?text=No+Image"
 
@@ -42,7 +54,7 @@ def render_card(item):
     with st.container(border=True):
         st.image(img_url, use_container_width=True)
         name = item.get('name', 'Product')
-        st.markdown(f"**{name[:30]}...**")
+        st.markdown(f"**{name}**")
         
         c1, c2 = st.columns(2)
         with c1:
@@ -70,30 +82,79 @@ for msg in st.session_state.messages:
 # New Input
 if prompt := st.chat_input("Type here..."):
     st.chat_message("user").markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt, "results": []})
+    st.session_state.messages.append(
+        {"role": "user", "content": prompt, "results": []}
+    )
 
+    # ---------- Reference Resolution ----------
+    ordinal_map = {
+        "first": 0, "1st": 0,
+        "second": 1, "2nd": 1,
+        "third": 2, "3rd": 2,
+        "fourth": 3, "4th": 3,
+        "fifth": 4, "5th": 4,
+        "sixth": 5, "6th": 5,
+    }
+
+    lower_prompt = prompt.lower()
+
+    if "last_results" in st.session_state:
+        for key, idx in ordinal_map.items():
+            if key in lower_prompt:
+                try:
+                    product = st.session_state.last_results[idx]
+
+                    detail_text = f"""
+**{product['name']}**
+
+• Brand: {product['brand']}
+• Color: {product['colour']}
+• Price: ₹{product['price']}
+**Rating:** ⭐ {round(product.get('avg_rating', 0), 1)}
+
+
+Would you like to buy this or compare it with another?
+"""
+                    with st.chat_message("assistant"):
+                        st.markdown(detail_text)
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": detail_text,
+                        "results": []
+                    })
+                    st.stop()
+                except:
+                    pass
+
+    # ---------- Normal Routing ----------
     with st.chat_message("assistant"):
         route = get_router_decision(prompt)
-        results = []
 
         if route == "CHAT":
-            response_text = generate_chat_response(prompt)
+            response_text = generate_chat_response(prompt, st.session_state.messages)
             st.markdown(response_text)
+
+            st.session_state.messages.append(
+                {"role": "assistant", "content": response_text, "results": []}
+            )
+
         else:
             with st.spinner("Searching..."):
-                results = search_products(prompt, top_k=6)
-            
+                k = extract_quantity(prompt)
+                results = search_products(prompt, top_k=k)
+
+            st.session_state.last_results = results
+
             st.markdown("Here are the best matches I found:")
-            
-            # THE SLOW REVEAL LOGIC
+
             if results:
-               
                 grid_cols = st.columns(3)
                 for idx, item in enumerate(results):
-                   
-                    time.sleep(0.3) 
+                    time.sleep(0.3)
                     with grid_cols[idx % 3]:
                         render_card(item)
 
-    # Save to history
-    st.session_state.messages.append({"role": "assistant", "content": "Here are the top matches:", "results": results})
+            st.session_state.messages.append(
+                {"role": "assistant", "content": "Here are the top matches:", "results": results}
+            )

@@ -39,6 +39,8 @@ def _safe_call(messages, max_tokens=200, temp=0.0, json_mode=False):
 def rewrite_query(query: str) -> str:
     """Optimizes the query WITHOUT adding categories not present."""
     system_prompt = (
+        "You are a shopping assistant if user asks any personal questions then politely refuse."
+        "you are meant to answer only fashion related queries."
         "You are a search query optimizer. "
         "Extract ONLY the fashion keywords. "
         "DO NOT assume a category (like kurta or dress) if the user did not mention one, ask user first"
@@ -121,11 +123,23 @@ def generate_product_summary(query: str, products: list) -> str:
     )
     return res or "Here are the best matches I found for you."
 
-def generate_chat_response(query: str) -> str:
-    return _safe_call(
-        [
-            {"role": "system", "content": "You are a polite, professional fashion stylist assistant."},
-            {"role": "user", "content": query}
-        ],
-        max_tokens=100
-    )
+def generate_chat_response(query: str, history: list) -> str:
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a polite, professional fashion stylist assistant. Remember user context and previous messages."
+        }
+    ]
+
+    # replay chat history
+    for msg in history:
+        if msg["role"] in ["user", "assistant"]:
+            messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+
+    # add latest user query
+    messages.append({"role": "user", "content": query})
+
+    return _safe_call(messages, max_tokens=100)
