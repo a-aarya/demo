@@ -1,54 +1,35 @@
 # clarification.py
-
 from llm_client import _safe_call
 import json
 
+def needs_clarification_llm(query: str):
+    system = """
+You are an AI shopping assistant.
 
-def check_clarification(query: str):
-    """
-    Decides if query is clear enough to search.
-
-    Returns dict:
-    {
-      "needs_clarification": bool,
-      "question": str,
-      "final_query": str
-    }
-    """
-
-    system_prompt = """
-You are an AI fashion shopping assistant.
-
-If the user query is too vague to search products,
+If the user input is ambiguous and cannot be searched directly,
 ask a clarification question.
 
 Examples:
-"green" → ask what product (kurta, saree, lehenga)
-"wedding outfit" → ask product type
-"red nike shoes" → clear, no clarification
+"I like red" → ask "Red what?"
+"Something nice" → ask product type
+"Red kurti under 1500" → clear
 
 Return ONLY JSON:
 {
- "needs_clarification": true/false,
- "question": "",
- "final_query": ""
+  "needs_clarification": true/false,
+  "question": ""
 }
 """
-
     res = _safe_call(
         [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": system},
             {"role": "user", "content": query}
         ],
-        max_tokens=120,
-        temp=0.0,
+        max_tokens=80,
+        temp=0
     )
 
     try:
         return json.loads(res)
     except:
-        return {
-            "needs_clarification": False,
-            "question": "",
-            "final_query": query
-        }
+        return {"needs_clarification": False, "question": ""}

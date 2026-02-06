@@ -15,7 +15,7 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 
 CSV_FILE = "FashionDataset.csv"  
-SAMPLE_SIZE = 1000              
+SAMPLE_SIZE = 2000              
 
 
 model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
@@ -39,12 +39,13 @@ conn = psycopg2.connect(
     user=DB_USER,
     password=DB_PASS,
     host=DB_HOST,
-    port=DB_PORT  
+    port=DB_PORT,
+    sslmode="require"   
 )
 
 cur = conn.cursor()
 
-# enable pgvector extension in this DB
+
 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 conn.commit()
 
@@ -81,7 +82,7 @@ for _, row in tqdm(df.iterrows(), total=len(df)):
     cur.execute("""
         INSERT INTO myntra_products
         (product_id, name, price, colour, brand, img, rating_count,
-         avg_rating, description, attributes, embedding)
+        avg_rating, description, attributes, embedding)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (product_id) DO NOTHING;
     """, (
