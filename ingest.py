@@ -39,8 +39,7 @@ conn = psycopg2.connect(
     user=DB_USER,
     password=DB_PASS,
     host=DB_HOST,
-    port=DB_PORT,
-    sslmode="require"   
+    port=DB_PORT  
 )
 
 cur = conn.cursor()
