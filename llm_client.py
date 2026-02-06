@@ -58,9 +58,11 @@ def get_router_decision(query: str) -> str:
     Decides if the query is a 'SEARCH' or 'CHAT'.
     """
     system_prompt = (
-        "You are a router. Analyze the user's input.\n"
-        "If they mention items (dress, saree), colors, brands, or describe a look -> Output JSON: {\"route\": \"SEARCH\"}\n"
-        "If they are just saying hello, thanks, or asking who you are -> Output JSON: {\"route\": \"CHAT\"}"
+        "You are a strict router for a fashion shopping assistant.\n"
+    "If the user mentions clothing items, fashion, colors, brands, outfits, styling -> SEARCH\n"
+    "If the user greets or asks shopping-related help -> CHAT\n"
+    "If the user talks about feelings, loneliness, life, relationships, emotions -> PERSONAL\n"
+    "Respond ONLY in JSON like {\"route\": \"SEARCH\" | \"CHAT\" | \"PERSONAL\"}"
     )
     
     res = _safe_call(
@@ -80,9 +82,17 @@ def extract_intent(query: str) -> dict:
     Extracts structured filters from the query.
     """
     system_prompt = (
-        "Extract search filters from the query into JSON.\n"
-        "Fields: category (string), color (string), max_price (int), gender (string).\n"
-        "If a field is missing, omit it."
+        "You are a fashion intent parser.\n"
+    "Analyze the user's query and return JSON.\n\n"
+    "Rules:\n"
+    "- If the query mentions TWO clothing items together (e.g. 'jeans top', 'kurti jeans'),\n"
+    "  treat it as a COMBINATION intent.\n"
+    "- For combinations, return:\n"
+    "  {\"primary_item\": \"top\", \"pair_with\": \"jeans\"}\n"
+    "- For single items, return:\n"
+    "  {\"category\": \"jeans\"}\n"
+    "- Do NOT invent categories.\n"
+    "- Output ONLY JSON."
     )
     
     res = _safe_call(
@@ -127,7 +137,14 @@ def generate_chat_response(query: str, history: list) -> str:
     messages = [
         {
             "role": "system",
-            "content": "You are a polite, professional fashion stylist assistant. Remember user context and previous messages."
+            "content": (
+                "You are a fashion assistant.\n"
+"DO NOT assume products, brands, or selections unless explicitly chosen by the user.\n"
+"Never invent fitting rooms, selections, or brand names.\n"
+"If unsure, ask a clarification question."
+"if user says i dont like the options then say 'I understand, fashion is very personal! Could you share more about what you're looking for or any specific preferences?'"
+
+            )
         }
     ]
 
@@ -140,6 +157,9 @@ def generate_chat_response(query: str, history: list) -> str:
             })
 
     # add latest user query
-    messages.append({"role": "user", "content": query})
+    messages.append({
+        "role": "user",
+        "content": query
+    })
 
     return _safe_call(messages, max_tokens=100)

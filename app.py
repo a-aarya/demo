@@ -208,7 +208,23 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
     if not resolved:
         with st.chat_message("assistant"):
             route = get_router_decision(prompt)
-            if route == "CHAT":
+            if route == "PERSONAL":
+                refusal_msg = (
+                    "I'm here to help with fashion and styling only 😊\n\n"
+                    "If you want outfit ideas, colors, or shopping help, just let me know!")
+
+                st.markdown(refusal_msg)
+
+                st.session_state.messages.append({
+                "role": "assistant",
+                "content": refusal_msg,
+                "results": [],
+                "type": "chat"
+                })
+
+                st.stop()
+    
+            elif route == "CHAT":
                 response = generate_chat_response(prompt, st.session_state.messages)
                 st.markdown(response)
                 st.session_state.messages.append({"role": "assistant", "content": response, "results": [], "type": "chat"})
@@ -216,12 +232,34 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
                 with st.spinner("Searching inventory..."):
                     k = extract_quantity(prompt)
                     results = search_products(prompt, top_k=k)
+
                 
+                if not results:
+                    no_result_msg = (
+                        "😕 I couldn’t find an exact match in our inventory.\n\n"
+                        "You can try:\n"
+                        "• A different category (e.g. just *tops*)\n"
+                        "• Changing style or color\n"
+                        "• Adjusting your budget\n\n"
+                        "What would you like to try next?"
+                    )
+
+                    st.markdown(no_result_msg)
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": no_result_msg,
+                        "results": [],
+                        "type": "chat"
+                    })
+
+                    st.stop()  
+
+             
                 st.session_state.last_results = results
                 msg_text = f"I've curated {len(results)} matches for you:"
                 st.markdown(msg_text)
-                
-                # Render grid immediately
+
                 cols = st.columns(4)
                 current_msg_idx = len(st.session_state.messages)
                 for i, item in enumerate(results):
@@ -229,8 +267,8 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
                         render_card(item, i, current_msg_idx)
 
                 st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": msg_text, 
+                    "role": "assistant",
+                    "content": msg_text,
                     "results": results,
                     "type": "chat"
                 })
