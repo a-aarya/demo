@@ -4,6 +4,7 @@ import os
 import re
 from search import search_products
 from llm_client import get_router_decision, generate_chat_response
+from clarification import check_clarification
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -158,6 +159,9 @@ if "messages" not in st.session_state:
         "type": "chat"
     })
 
+if "pending_query" not in st.session_state:
+    st.session_state.pending_query = None
+
 # Render Chat History (Persistent)
 for m_idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
@@ -213,24 +217,40 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
                 st.markdown(response)
                 st.session_state.messages.append({"role": "assistant", "content": response, "results": [], "type": "chat"})
             else:
-                with st.spinner("Searching inventory..."):
-                    k = extract_quantity(prompt)
-                    results = search_products(prompt, top_k=k)
-                
-                st.session_state.last_results = results
-                msg_text = f"I've curated {len(results)} matches for you:"
-                st.markdown(msg_text)
-                
-                # Render grid immediately
-                cols = st.columns(4)
-                current_msg_idx = len(st.session_state.messages)
-                for i, item in enumerate(results):
-                    with cols[i % 4]:
-                        render_card(item, i, current_msg_idx)
+                # ===============================
+                # CASE 1: USER ANSWERING CLARIFICATION
+                # ===============================
+                if st.session_state.pending_query:
+                    full_query = st.session_state.pending_query + " " + prompt
+                    st.session_state.pending_query = None
 
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": msg_text, 
-                    "results": results,
-                    "type": "chat"
-                })
+                    with st.spinner("Searching inventory..."):
+                        k = extract_quantity(full_query)
+                        results = search_products(full_query, top_k=k)
+
+                # ===============================
+                # CASE 2: FIRST QUERY → CHECK CLARITY
+                # ===============================
+                else:
+                    decision = check_clarification(prompt)
+
+                    if decision["needs_clarification"]:
+                        st.session_state.pending_query = prompt
+                        
+                        question = decision["question"]
+                        st.markdown(f"🤖 {question}")
+
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"🤖 {question}",
+                            "results": [],
+                            "type": "chat"
+                        })
+                        st.stop()
+
+                    else:
+                        final_query = decision.get("final_query", prompt)
+
+                        with st.spinner("Searching inventory..."):
+                            k = extract_quantity(final_query)
+                            results = search_products(final_query, top_k=k)
