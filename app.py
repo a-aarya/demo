@@ -139,6 +139,53 @@ def format_clarification_message(questions, reason=""):
     return f"{prefix}\n\n{question_lines}\n\nReply in one message and I will search immediately."
 
 
+def has_enough_search_context(text):
+    """
+    Rule-based guard to avoid unnecessary repeated clarification rounds.
+    """
+    if not text:
+        return False
+
+    lowered = text.lower()
+    tokens = re.findall(r"\b\w+\b", lowered)
+    token_count = len(tokens)
+
+    category_terms = {
+        "saree", "sari", "kurti", "kurta", "dress", "gown", "shirt", "top",
+        "tee", "blouse", "jeans", "denim", "jacket", "coat", "lehenga",
+        "salwar", "suit", "tshirt", "t-shirt", "hoodie", "skirt", "pants",
+        "trousers", "traditional", "ethnic", "western"
+    }
+    color_terms = {
+        "red", "blue", "green", "white", "black", "grey", "gray", "pink",
+        "purple", "orange", "yellow", "maroon", "navy", "beige", "brown"
+    }
+    audience_terms = {
+        "men", "man", "male", "women", "woman", "female", "kids", "kid",
+        "boy", "boys", "girl", "girls", "family", "adult", "adults"
+    }
+    occasion_terms = {
+        "wedding", "party", "festival", "office", "casual", "formal",
+        "college", "daily", "travel", "function", "engagement", "diwali", "eid"
+    }
+
+    has_category = any(term in lowered for term in category_terms)
+    has_color = any(term in lowered for term in color_terms)
+    has_audience = any(term in lowered for term in audience_terms)
+    has_occasion = any(term in lowered for term in occasion_terms)
+    has_budget = bool(re.search(r"\b(budget|under|below|between|rs|inr|rupee|rupees|\d{3,})\b", lowered))
+    has_quantity = bool(re.search(r"\b\d+\b", lowered))
+
+    if "family" in lowered:
+        return (has_audience or has_quantity) and (has_category or has_color or has_occasion or has_budget)
+
+    if has_category:
+        return True
+
+    details = sum([has_color, has_audience, has_occasion, has_budget, has_quantity])
+    return token_count >= 6 and details >= 2
+
+
 def render_card(item, idx, msg_idx):
     img_url = item.get("image") or item.get("img") or "https://via.placeholder.com/300x400?text=No+Image"
     rating = format_rating(item.get("avg_rating"))
@@ -274,21 +321,8 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
                 original_query = pending.get("original_query", "")
                 refined_query = build_refined_search_query(original_query, combined_answers)
 
-                follow_up = get_clarification_plan(refined_query)
                 rounds = int(pending.get("rounds", 1))
-                if follow_up.get("needs_clarification") and rounds < 2 and follow_up.get("questions"):
-                    questions = follow_up.get("questions", [])[:3]
-                    clarification_msg = format_clarification_message(questions, follow_up.get("reason", ""))
-                    st.markdown(clarification_msg)
-                    st.session_state.pending_clarification = {
-                        "original_query": original_query,
-                        "answers": answers,
-                        "rounds": rounds + 1,
-                    }
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": clarification_msg, "results": [], "type": "chat"}
-                    )
-                else:
+                if has_enough_search_context(refined_query):
                     st.session_state.pending_clarification = None
                     ack_msg = "Thanks, that helps. Searching with those preferences now."
                     st.markdown(ack_msg)
@@ -296,6 +330,28 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
                         {"role": "assistant", "content": ack_msg, "results": [], "type": "chat"}
                     )
                     run_search_and_render(refined_query)
+                else:
+                    follow_up = get_clarification_plan(refined_query)
+                    if follow_up.get("needs_clarification") and rounds < 2 and follow_up.get("questions"):
+                        questions = follow_up.get("questions", [])[:3]
+                        clarification_msg = format_clarification_message(questions, follow_up.get("reason", ""))
+                        st.markdown(clarification_msg)
+                        st.session_state.pending_clarification = {
+                            "original_query": original_query,
+                            "answers": answers,
+                            "rounds": rounds + 1,
+                        }
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": clarification_msg, "results": [], "type": "chat"}
+                        )
+                    else:
+                        st.session_state.pending_clarification = None
+                        ack_msg = "Thanks, that helps. Searching with those preferences now."
+                        st.markdown(ack_msg)
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": ack_msg, "results": [], "type": "chat"}
+                        )
+                        run_search_and_render(refined_query)
             else:
                 route = get_router_decision(prompt)
                 if route == "PERSONAL":
@@ -314,19 +370,22 @@ if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
                         {"role": "assistant", "content": response, "results": [], "type": "chat"}
                     )
                 else:
-                    clarification = get_clarification_plan(prompt)
-                    if clarification.get("needs_clarification") and clarification.get("questions"):
-                        clarification_msg = format_clarification_message(
-                            clarification.get("questions", []), clarification.get("reason", "")
-                        )
-                        st.markdown(clarification_msg)
-                        st.session_state.pending_clarification = {
-                            "original_query": prompt,
-                            "answers": [],
-                            "rounds": 1,
-                        }
-                        st.session_state.messages.append(
-                            {"role": "assistant", "content": clarification_msg, "results": [], "type": "chat"}
-                        )
-                    else:
+                    if has_enough_search_context(prompt):
                         run_search_and_render(prompt)
+                    else:
+                        clarification = get_clarification_plan(prompt)
+                        if clarification.get("needs_clarification") and clarification.get("questions"):
+                            clarification_msg = format_clarification_message(
+                                clarification.get("questions", []), clarification.get("reason", "")
+                            )
+                            st.markdown(clarification_msg)
+                            st.session_state.pending_clarification = {
+                                "original_query": prompt,
+                                "answers": [],
+                                "rounds": 1,
+                            }
+                            st.session_state.messages.append(
+                                {"role": "assistant", "content": clarification_msg, "results": [], "type": "chat"}
+                            )
+                        else:
+                            run_search_and_render(prompt)
