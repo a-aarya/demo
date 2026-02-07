@@ -1,29 +1,32 @@
-import streamlit as st
-import time
-import os
 import re
-from search import search_products
-from llm_client import get_router_decision, generate_chat_response
+
+import streamlit as st
 from dotenv import load_dotenv
+
+from llm_client import (
+    build_refined_search_query,
+    generate_chat_response,
+    get_clarification_plan,
+    get_router_decision,
+)
+from search import search_products
 
 load_dotenv()
 
-# --- 1. Page Config & Professional Dark CSS ---
 st.set_page_config(page_title="AI Fashion Stylist", layout="wide")
 
-st.markdown("""
+st.markdown(
+    """
 <style>
-    /* Absolute Dark Background */
     .stApp {
         background-color: #000000;
         color: #FFFFFF;
     }
 
-    /* Smaller Flipkart/Amazon Style Card Container */
     .card-container {
         display: flex;
         flex-direction: column;
-        height: 420px; 
+        height: 420px;
         background: #111111;
         border: 1px solid #222222;
         border-radius: 8px;
@@ -31,7 +34,7 @@ st.markdown("""
         transition: transform 0.2s ease, border-color 0.2s ease;
         margin-bottom: 10px;
     }
-    
+
     .card-container:hover {
         border-color: #4ADE80;
         transform: translateY(-5px);
@@ -64,7 +67,7 @@ st.markdown("""
         font-size: 13px;
         color: #FFFFFF;
         margin: 4px 0;
-        height: 38px; 
+        height: 38px;
         overflow: hidden;
         display: -webkit-box;
         -webkit-line-clamp: 2;
@@ -101,174 +104,229 @@ st.markdown("""
         color: #cbd5e0;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# Helper: Format Rating
+
 def format_rating(val):
-    try: return f"{float(val):.1f}"
-    except: return "0.0"
+    try:
+        return f"{float(val):.1f}"
+    except Exception:
+        return "0.0"
 
-# Helper: Clean HTML description
+
 def parse_description(text):
-    if not text or str(text).lower() == "nan": return ["No details available."]
-    clean = re.sub(r'<.*?>', '\n', text)
-    return [line.strip() for line in clean.split('\n') if line.strip()]
+    if not text or str(text).lower() == "nan":
+        return ["No details available."]
+    clean = re.sub(r"<.*?>", "\n", text)
+    return [line.strip() for line in clean.split("\n") if line.strip()]
 
-def extract_quantity(text, default=6, max_limit=12):
-    match = re.search(r"\b(\d+)\b", text)
+
+def extract_quantity(text, default=6, max_limit=6):
+    match = re.search(r"\b(\d+)\b", text or "")
     if match:
         qty = int(match.group(1))
         return min(qty, max_limit)
     return default
 
-# --- 2. Compact Render Card (Fixed Arguments) ---
+
+def format_clarification_message(questions, reason=""):
+    question_lines = "\n".join([f"{idx + 1}. {q}" for idx, q in enumerate(questions)])
+    prefix = "To narrow this down, I need a bit more detail."
+    if reason:
+        prefix = f"{prefix}\n{reason}"
+    return f"{prefix}\n\n{question_lines}\n\nReply in one message and I will search immediately."
+
+
 def render_card(item, idx, msg_idx):
     img_url = item.get("image") or item.get("img") or "https://via.placeholder.com/300x400?text=No+Image"
-    rating = format_rating(item.get('avg_rating'))
-    
+    rating = format_rating(item.get("avg_rating"))
+
     with st.container():
-        st.markdown(f"""
+        st.markdown(
+            f"""
             <div class="card-container">
                 <div class="image-container"><img src="{img_url}"></div>
                 <div class="card-content">
                     <div>
-                        <p class="brand-name">{item.get('brand', 'FASHION')}</p>
-                        <p class="product-title">{item.get('name', 'Product Name')}</p>
+                        <p class="brand-name">{item.get("brand", "FASHION")}</p>
+                        <p class="product-title">{item.get("name", "Product Name")}</p>
                     </div>
                     <div class="price-row">
-                        <span class="price-val">₹{item.get('price', '0')}</span>
-                        <span class="rating-badge">⭐ {rating}</span>
+                        <span class="price-val">Rs {item.get("price", "0")}</span>
+                        <span class="rating-badge">Rating {rating}</span>
                     </div>
                 </div>
             </div>
-        """, unsafe_allow_html=True)
-        # Unique key using msg_idx and idx prevents NameError and duplicate keys
-        if st.button("🛒 Add to Cart", key=f"btn_cart_{msg_idx}_{idx}", use_container_width=True):
-            st.toast(f"Added {item.get('brand')} to your cart! 🔥")
+        """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Add to Cart", key=f"btn_cart_{msg_idx}_{idx}", use_container_width=True):
+            st.toast(f"Added {item.get('brand')} to your cart.")
 
-st.title("AI Fashion Concierge")
 
-# --- 3. Session State & History ---
+def run_search_and_render(search_query):
+    with st.spinner("Searching inventory..."):
+        k = extract_quantity(search_query)
+        results = search_products(search_query, top_k=k)
+
+    if not results:
+        no_result_msg = (
+            "I could not find an exact match in our inventory.\n\n"
+            "You can try:\n"
+            "- A different category (for example: tops)\n"
+            "- Changing style or color\n"
+            "- Adjusting your budget\n\n"
+            "What would you like to try next?"
+        )
+        st.markdown(no_result_msg)
+        st.session_state.messages.append(
+            {"role": "assistant", "content": no_result_msg, "results": [], "type": "chat"}
+        )
+        return
+
+    st.session_state.last_results = results
+    msg_text = f"I have curated {len(results)} matches for you:"
+    st.markdown(msg_text)
+
+    cols = st.columns(4)
+    current_msg_idx = len(st.session_state.messages)
+    for i, item in enumerate(results):
+        with cols[i % 4]:
+            render_card(item, i, current_msg_idx)
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": msg_text, "results": results, "type": "chat"}
+    )
+
+
+st.title("AI Fashion Assistant")
+
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.messages.append({
-        "role": "assistant", 
-        "content": "Welcome back. Looking for something specific?", 
-        "results": [],
-        "type": "chat"
-    })
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": "Welcome back. Looking for something specific?",
+            "results": [],
+            "type": "chat",
+        }
+    ]
 
-# Render Chat History (Persistent)
+if "pending_clarification" not in st.session_state:
+    st.session_state.pending_clarification = None
+
 for m_idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        
+
         if msg.get("results"):
             cols = st.columns(4)
             for p_idx, item in enumerate(msg["results"]):
                 with cols[p_idx % 4]:
                     render_card(item, p_idx, m_idx)
-        
+
         if msg.get("type") == "details":
             p = msg["product_data"]
             col1, col2 = st.columns([1, 2])
             with col1:
-                st.image(p.get('image') or p.get('img'), use_container_width=True)
-                if st.button("🛒 Add to Bag", key=f"det_cart_{m_idx}", type="primary", use_container_width=True):
-                    st.success("Added to bag!")
+                st.image(p.get("image") or p.get("img"), use_container_width=True)
+                if st.button("Add to Bag", key=f"det_cart_{m_idx}", type="primary", use_container_width=True):
+                    st.success("Added to bag.")
             with col2:
-                st.markdown(f"**Price: ₹{p['price']} | Rating: ⭐ {format_rating(p.get('avg_rating'))}**")
-                desc = parse_description(p.get('description', ''))
+                st.markdown(f"**Price: Rs {p['price']} | Rating: {format_rating(p.get('avg_rating'))}**")
+                desc = parse_description(p.get("description", ""))
                 st.markdown("**Detailed Specifications:**")
                 html_desc = "".join([f"<li>{line}</li>" for line in desc[:10]])
                 st.markdown(f'<div class="desc-box"><ul>{html_desc}</ul></div>', unsafe_allow_html=True)
 
-# Input Handling
+
 if prompt := st.chat_input("Search for styles or ask for '1st one details'"):
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt, "results": [], "type": "chat"})
 
     lower_prompt = prompt.lower()
     ordinal_map = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "fourth": 3, "4th": 3}
-    
+
     resolved = False
     if "last_results" in st.session_state and any(x in lower_prompt for x in ordinal_map.keys()):
         for key, idx in ordinal_map.items():
             if key in lower_prompt and idx < len(st.session_state.last_results):
                 product = st.session_state.last_results[idx]
                 resolved = True
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": f"### 🔍 Deep Dive: {product['brand']}\n{product['name']}",
-                    "type": "details",
-                    "product_data": product
-                })
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": f"### Product details: {product['brand']}\n{product['name']}",
+                        "type": "details",
+                        "product_data": product,
+                    }
+                )
                 st.rerun()
 
     if not resolved:
         with st.chat_message("assistant"):
-            route = get_router_decision(prompt)
-            if route == "PERSONAL":
-                refusal_msg = (
-                    "I'm here to help with fashion and styling only 😊\n\n"
-                    "If you want outfit ideas, colors, or shopping help, just let me know!")
+            pending = st.session_state.get("pending_clarification")
+            if pending:
+                answers = pending.get("answers", [])
+                answers.append(prompt)
+                combined_answers = " ".join(answers).strip()
+                original_query = pending.get("original_query", "")
+                refined_query = build_refined_search_query(original_query, combined_answers)
 
-                st.markdown(refusal_msg)
-
-                st.session_state.messages.append({
-                "role": "assistant",
-                "content": refusal_msg,
-                "results": [],
-                "type": "chat"
-                })
-
-                st.stop()
-    
-            elif route == "CHAT":
-                response = generate_chat_response(prompt, st.session_state.messages)
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response, "results": [], "type": "chat"})
-            else:
-                with st.spinner("Searching inventory..."):
-                    k = extract_quantity(prompt)
-                    results = search_products(prompt, top_k=k)
-
-                
-                if not results:
-                    no_result_msg = (
-                        "😕 I couldn’t find an exact match in our inventory.\n\n"
-                        "You can try:\n"
-                        "• A different category (e.g. just *tops*)\n"
-                        "• Changing style or color\n"
-                        "• Adjusting your budget\n\n"
-                        "What would you like to try next?"
+                follow_up = get_clarification_plan(refined_query)
+                rounds = int(pending.get("rounds", 1))
+                if follow_up.get("needs_clarification") and rounds < 2 and follow_up.get("questions"):
+                    questions = follow_up.get("questions", [])[:3]
+                    clarification_msg = format_clarification_message(questions, follow_up.get("reason", ""))
+                    st.markdown(clarification_msg)
+                    st.session_state.pending_clarification = {
+                        "original_query": original_query,
+                        "answers": answers,
+                        "rounds": rounds + 1,
+                    }
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": clarification_msg, "results": [], "type": "chat"}
                     )
-
-                    st.markdown(no_result_msg)
-
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": no_result_msg,
-                        "results": [],
-                        "type": "chat"
-                    })
-
-                    st.stop()  
-
-             
-                st.session_state.last_results = results
-                msg_text = f"I've curated {len(results)} matches for you:"
-                st.markdown(msg_text)
-
-                cols = st.columns(4)
-                current_msg_idx = len(st.session_state.messages)
-                for i, item in enumerate(results):
-                    with cols[i % 4]:
-                        render_card(item, i, current_msg_idx)
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": msg_text,
-                    "results": results,
-                    "type": "chat"
-                })
+                else:
+                    st.session_state.pending_clarification = None
+                    ack_msg = "Thanks, that helps. Searching with those preferences now."
+                    st.markdown(ack_msg)
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": ack_msg, "results": [], "type": "chat"}
+                    )
+                    run_search_and_render(refined_query)
+            else:
+                route = get_router_decision(prompt)
+                if route == "PERSONAL":
+                    refusal_msg = (
+                        "I can help with fashion and styling only.\n\n"
+                        "If you want outfit ideas, colors, or shopping help, tell me what you need."
+                    )
+                    st.markdown(refusal_msg)
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": refusal_msg, "results": [], "type": "chat"}
+                    )
+                elif route == "CHAT":
+                    response = generate_chat_response(prompt, st.session_state.messages)
+                    st.markdown(response)
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": response, "results": [], "type": "chat"}
+                    )
+                else:
+                    clarification = get_clarification_plan(prompt)
+                    if clarification.get("needs_clarification") and clarification.get("questions"):
+                        clarification_msg = format_clarification_message(
+                            clarification.get("questions", []), clarification.get("reason", "")
+                        )
+                        st.markdown(clarification_msg)
+                        st.session_state.pending_clarification = {
+                            "original_query": prompt,
+                            "answers": [],
+                            "rounds": 1,
+                        }
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": clarification_msg, "results": [], "type": "chat"}
+                        )
+                    else:
+                        run_search_and_render(prompt)

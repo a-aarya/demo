@@ -163,3 +163,76 @@ def generate_chat_response(query: str, history: list) -> str:
     })
 
     return _safe_call(messages, max_tokens=100)
+
+def get_clarification_plan(query: str) -> dict:
+    """
+    Detects vague shopping requests and returns targeted follow-up questions.
+    """
+    system_prompt = (
+        "You are a fashion shopping clarification planner.\n"
+        "Decide whether the user's request is too vague to run a good product search.\n"
+        "If vague, ask short and specific follow-up questions.\n\n"
+        "Return ONLY valid JSON with this shape:\n"
+        "{\n"
+        "  \"needs_clarification\": true|false,\n"
+        "  \"questions\": [\"question 1\", \"question 2\"],\n"
+        "  \"missing_fields\": [\"category\", \"color\"],\n"
+        "  \"reason\": \"short reason\"\n"
+        "}\n\n"
+        "Rules:\n"
+        "- Ask at most 4 questions.\n"
+        "- Focus on practical filters: category/type, color, occasion, audience, budget.\n"
+        "- For family/group shopping, include questions about who to shop for (adults/kids, gender split, count).\n"
+        "- If request is specific enough, set needs_clarification to false and questions to [].\n"
+        "- Fashion domain only."
+    )
+
+    res = _safe_call(
+        [{"role": "system", "content": system_prompt}, {"role": "user", "content": query}],
+        max_tokens=220,
+        temp=0.0,
+        json_mode=True
+    )
+
+    try:
+        data = json.loads(res)
+        questions = data.get("questions") or []
+        if not isinstance(questions, list):
+            questions = []
+        return {
+            "needs_clarification": bool(data.get("needs_clarification", False)) and bool(questions),
+            "questions": [str(q).strip() for q in questions if str(q).strip()][:4],
+            "missing_fields": data.get("missing_fields") or [],
+            "reason": str(data.get("reason") or "").strip()
+        }
+    except Exception:
+        return {
+            "needs_clarification": False,
+            "questions": [],
+            "missing_fields": [],
+            "reason": ""
+        }
+
+def build_refined_search_query(original_query: str, clarification_answers: str) -> str:
+    """
+    Combines original request + user clarification into a single searchable query.
+    """
+    system_prompt = (
+        "You are a fashion shopping query refiner.\n"
+        "Combine the original request and follow-up answers into one concise search query.\n"
+        "Keep all concrete constraints (category, audience, occasion, color, budget, count).\n"
+        "Do not invent missing facts.\n"
+        "Output plain text only."
+    )
+    user_prompt = (
+        f"Original request:\n{original_query}\n\n"
+        f"Clarification answers:\n{clarification_answers}\n\n"
+        "Return one final search query."
+    )
+
+    res = _safe_call(
+        [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+        max_tokens=120,
+        temp=0.0
+    )
+    return res.strip() if res else f"{original_query}. {clarification_answers}"
